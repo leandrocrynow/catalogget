@@ -1,0 +1,191 @@
+-- Captura o outfit do seu personagem em JSON (inclui LAYERED CLOTHING).
+-- Rodar na barra de comando do Studio (View > Command Bar) com o jogo em Play.
+
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+
+local player = Players:GetPlayers()[1]
+if not player or not player.Character then
+	return warn("❌ Sem player/Character")
+end
+local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+if not humanoid then
+	return warn("❌ Sem Humanoid")
+end
+
+local SIMPLE_KEYS = {
+	"Shirt", "Pants", "GraphicTShirt", "Face", "Head", "Torso", "LeftArm", "RightArm", "LeftLeg", "RightLeg",
+	"BodyTypeScale", "HeadScale", "HeightScale", "WidthScale", "ProportionScale", "DepthScale",
+	"ClimbAnimation", "FallAnimation", "IdleAnimation", "JumpAnimation", "MoodAnimation",
+	"RunAnimation", "StaticFacialAnimation", "SwimAnimation", "WalkAnimation",
+}
+local COLOR_KEYS = { "SkinColor", "HeadColor", "TorsoColor", "LeftArmColor", "RightArmColor", "LeftLegColor", "RightLegColor" }
+
+local function getDescription()
+	-- GetAppliedDescription = o que o personagem está usando AGORA (inclui layered)
+	local ok, desc = pcall(function()
+		return humanoid:GetAppliedDescription()
+	end)
+	if ok and desc then
+		return desc
+	end
+	return humanoid:FindFirstChildOfClass("HumanoidDescription")
+end
+
+local function buildJSON()
+	local hd = getDescription()
+	if not hd then
+		return "{}"
+	end
+	local t = {}
+
+	for _, k in ipairs(SIMPLE_KEYS) do
+		local ok, v = pcall(function() return hd[k] end)
+		if ok and v ~= nil and v ~= 0 then
+			t[k] = v
+		end
+	end
+
+	for _, k in ipairs(COLOR_KEYS) do
+		local ok, v = pcall(function() return hd[k] end)
+		if ok and typeof(v) == "Color3" then
+			t[k] = v:ToHex()
+		end
+	end
+
+	-- Todos os acessórios: rígidos E layered, com os campos que o layered precisa
+	t._Accessories = {}
+	local ok, list = pcall(function() return hd:GetAccessories(true) end)
+	if ok then
+		for _, a in ipairs(list) do
+			if a.AssetId and a.AssetId ~= 0 then
+				local e = {
+					AssetId = a.AssetId,
+					AccessoryType = a.AccessoryType and a.AccessoryType.Name or "Unknown",
+					IsLayered = a.IsLayered == true,
+				}
+				if e.IsLayered then
+					e.Order = a.Order
+					e.Puffiness = a.Puffiness
+				end
+				table.insert(t._Accessories, e)
+			end
+		end
+	end
+
+	local layered = 0
+	for _, e in ipairs(t._Accessories) do
+		if e.IsLayered then layered += 1 end
+	end
+	print(("📋 %d acessórios (%d layered)"):format(#t._Accessories, layered))
+
+	return HttpService:JSONEncode(t)
+end
+
+-- ─── GUI ───
+local old = player.PlayerGui:FindFirstChild("OutfitCaptureGUI")
+if old then old:Destroy() end
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "OutfitCaptureGUI"
+gui.ResetOnSpawn = false
+gui.Parent = player.PlayerGui
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 500, 0, 240)
+frame.Position = UDim2.new(0.5, -250, 0.5, -120)
+frame.BackgroundColor3 = Color3.fromRGB(28, 28, 34)
+frame.BorderSizePixel = 0
+frame.Parent = gui
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 8)
+
+local bar = Instance.new("Frame")
+bar.Size = UDim2.new(1, 0, 0, 26)
+bar.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+bar.BorderSizePixel = 0
+bar.Parent = frame
+Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 8)
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 22, 0, 22)
+closeBtn.Position = UDim2.new(1, -24, 0, 2)
+closeBtn.BackgroundColor3 = Color3.fromRGB(140, 40, 40)
+closeBtn.TextColor3 = Color3.new(1, 1, 1)
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.Text = "✕"
+closeBtn.Parent = bar
+Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
+
+local box = Instance.new("TextBox")
+box.Size = UDim2.new(1, -20, 1, -80)
+box.Position = UDim2.new(0, 10, 0, 34)
+box.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+box.TextColor3 = Color3.fromRGB(180, 255, 180)
+box.Font = Enum.Font.Code
+box.TextSize = 11
+box.TextWrapped = true
+box.ClearTextOnFocus = false
+box.MultiLine = true
+box.TextXAlignment = Enum.TextXAlignment.Left
+box.TextYAlignment = Enum.TextYAlignment.Top
+box.Text = buildJSON()
+box.Parent = frame
+
+local selectBtn = Instance.new("TextButton")
+selectBtn.Size = UDim2.new(0.5, -15, 0, 32)
+selectBtn.Position = UDim2.new(0, 10, 1, -42)
+selectBtn.BackgroundColor3 = Color3.fromRGB(60, 90, 160)
+selectBtn.TextColor3 = Color3.new(1, 1, 1)
+selectBtn.Font = Enum.Font.GothamBold
+selectBtn.Text = "Selecionar tudo"
+selectBtn.Parent = frame
+Instance.new("UICorner", selectBtn).CornerRadius = UDim.new(0, 6)
+
+local refreshBtn = Instance.new("TextButton")
+refreshBtn.Size = UDim2.new(0.5, -15, 0, 32)
+refreshBtn.Position = UDim2.new(0.5, 5, 1, -42)
+refreshBtn.BackgroundColor3 = Color3.fromRGB(80, 130, 80)
+refreshBtn.TextColor3 = Color3.new(1, 1, 1)
+refreshBtn.Font = Enum.Font.GothamBold
+refreshBtn.Text = "🔄 Atualizar"
+refreshBtn.Parent = frame
+Instance.new("UICorner", refreshBtn).CornerRadius = UDim.new(0, 6)
+
+selectBtn.MouseButton1Click:Connect(function()
+	box:CaptureFocus()
+	task.defer(function()
+		box.SelectionStart = 1
+		box.CursorPosition = #box.Text + 1
+	end)
+end)
+
+refreshBtn.MouseButton1Click:Connect(function()
+	box.Text = buildJSON()
+	print("🔄 JSON atualizado")
+end)
+
+-- Arrastar pela barra (conexões são desligadas ao fechar)
+local conns = {}
+local dragging, dragStart, origin = false, nil, nil
+table.insert(conns, bar.InputBegan:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging, dragStart, origin = true, i.Position, frame.Position
+	end
+end))
+table.insert(conns, UIS.InputChanged:Connect(function(i)
+	if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
+		local d = i.Position - dragStart
+		frame.Position = UDim2.new(origin.X.Scale, origin.X.Offset + d.X, origin.Y.Scale, origin.Y.Offset + d.Y)
+	end
+end))
+table.insert(conns, UIS.InputEnded:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = false
+	end
+end))
+
+closeBtn.MouseButton1Click:Connect(function()
+	for _, c in ipairs(conns) do c:Disconnect() end
+	gui:Destroy()
+end)
