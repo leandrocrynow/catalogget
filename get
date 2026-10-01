@@ -1,4 +1,4 @@
--- Captura o outfit do seu personagem em JSON (inclui LAYERED CLOTHING).
+-- Captura o outfit do seu personagem em JSON (inclui LAYERED CLOTHING + Position/Rotation/Scale).
 -- Rodar na barra de comando do Studio (View > Command Bar) com o jogo em Play.
 
 local HttpService = game:GetService("HttpService")
@@ -23,7 +23,6 @@ local SIMPLE_KEYS = {
 local COLOR_KEYS = { "SkinColor", "HeadColor", "TorsoColor", "LeftArmColor", "RightArmColor", "LeftLegColor", "RightLegColor" }
 
 local function getDescription()
-	-- GetAppliedDescription = o que o personagem está usando AGORA (inclui layered)
 	local ok, desc = pcall(function()
 		return humanoid:GetAppliedDescription()
 	end)
@@ -31,6 +30,72 @@ local function getDescription()
 		return desc
 	end
 	return humanoid:FindFirstChildOfClass("HumanoidDescription")
+end
+
+-- Vetor -> tabela {X,Y,Z}
+local function vecToTable(v)
+	if typeof(v) ~= "Vector3" then return nil end
+	return { X = v.X, Y = v.Y, Z = v.Z }
+end
+
+-- Coleta transformações reais dos Accessory instances no personagem.
+-- Chave: AssetId -> { Position = {...}, Rotation = {...}, Scale = {...} }
+local function coletarTransformacoes(char)
+	local mapa = {}
+	for _, obj in ipairs(char:GetDescendants()) do
+		if obj:IsA("Accessory") then
+			local handle = obj:FindFirstChild("Handle")
+			if handle then
+				-- Descobre o AssetId do acessório
+				local assetId = nil
+				local ok, info = pcall(function()
+					return game:GetService("MarketplaceService"):GetProductInfo(handle.MeshId or 0)
+				end)
+				-- fallback: pega do nome/atributo se existir
+				if obj:GetAttribute("AssetId") then
+					assetId = obj:GetAttribute("AssetId")
+				end
+				-- Tenta via MeshId/TextureId
+				if not assetId and handle:FindFirstChildOfClass("SpecialMesh") then
+					assetId = handle.SpecialMesh.MeshId
+				end
+				-- Tenta pelo nome "Accessory_123456"
+				if not assetId and obj.Name:match("%d+") then
+					assetId = tonumber(obj.Name:match("%d+"))
+				end
+
+				if assetId then
+					local entry = mapa[assetId] or {}
+					-- Posição/Rotação do Attachment ou Weld
+					local attach = handle:FindFirstChildOfClass("Attachment")
+					if attach then
+						entry.Position = vecToTable(attach.Position)
+						entry.Rotation = vecToTable(Vector3.new(
+							math.deg(attach.Orientation.X),
+							math.deg(attach.Orientation.Y),
+							math.deg(attach.Orientation.Z)
+						))
+					end
+					local weld = handle:FindFirstChild("AccessoryWeld") or handle:FindFirstChildOfClass("Weld")
+					if weld then
+						entry.Position = vecToTable(weld.C0.Position)
+						entry.Rotation = vecToTable(Vector3.new(
+							math.deg(weld.C0:ToOrientation())
+						))
+					end
+					-- WrapLayer (layered clothing) tem Scale/Offset
+					local wrap = handle:FindFirstChildOfClass("WrapLayer") or handle:FindFirstChildOfClass("WrapTarget")
+					if wrap then
+						entry.Scale = vecToTable(wrap.Scale) or { X = 1, Y = 1, Z = 1 }
+						entry.Puffiness = wrap.Puffiness
+						entry.Order = wrap.Order
+					end
+					mapa[assetId] = entry
+				end
+			end
+		end
+	end
+	return mapa
 end
 
 local function buildJSON()
@@ -54,6 +119,9 @@ local function buildJSON()
 		end
 	end
 
+	-- Coleta transformações reais do personagem
+	local transformacoes = coletarTransformacoes(player.Character)
+
 	-- Todos os acessórios: rígidos E layered, com os campos que o layered precisa
 	t._Accessories = {}
 	local ok, list = pcall(function() return hd:GetAccessories(true) end)
@@ -68,6 +136,28 @@ local function buildJSON()
 				if e.IsLayered then
 					e.Order = a.Order
 					e.Puffiness = a.Puffiness
+				end
+				-- Aplica transformações capturadas do personagem
+				local tr = transformacoes[a.AssetId]
+				if tr then
+					if tr.Position then e.Position = tr.Position end
+					if tr.Rotation then e.Rotation = tr.Rotation end
+					if tr.Scale then e.Scale = tr.Scale end
+					if tr.Puffiness and not e.Puffiness then e.Puffiness = tr.Puffiness end
+					if tr.Order and not e.Order then e.Order = tr.Order end
+				end
+				-- Também tenta ler Position/Rotation/Scale do AccessoryDescription (pode existir em versões novas)
+				local okP, pos = pcall(function() return a.Position end)
+				if okP and typeof(pos) == "Vector3" and (pos.Magnitude > 0) then
+					e.Position = vecToTable(pos)
+				end
+				local okR, rot = pcall(function() return a.Rotation end)
+				if okR and typeof(rot) == "Vector3" and (rot.Magnitude > 0) then
+					e.Rotation = vecToTable(rot)
+				end
+				local okS, scl = pcall(function() return a.Scale end)
+				if okS and typeof(scl) == "Vector3" and (scl.Magnitude > 0) then
+					e.Scale = vecToTable(scl)
 				end
 				table.insert(t._Accessories, e)
 			end
